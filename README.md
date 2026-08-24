@@ -38,7 +38,12 @@
 ./gradlew assembleDebug
 ```
 
-产物：`app/build/outputs/apk/debug/app-debug.apk`
+产物：`app/build/outputs/apk/debug/app-debug.apk`（已构建好的现成 APK 见 `dist/喵喵助手-v1.0-debug.apk`）
+
+> 提示：若 Gradle 发行版下载缓慢（国内网络），可先用浏览器/下载工具从
+> https://mirrors.cloud.tencent.com/gradle/gradle-8.8-bin.zip 下载
+> `gradle-8.8-bin.zip` 放入 `%USERPROFILE%\.gradle\wrapper\dists\gradle-8.8-bin\` 下对应哈希目录，
+> 或直接修改 `gradle/wrapper/gradle-wrapper.properties` 的 distributionUrl 为镜像地址。
 
 ## 使用
 
