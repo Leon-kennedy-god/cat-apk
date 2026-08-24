@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  喵喵助手无障碍服务配置。
+  与原版的关键差异：不声明 android:packageNames —— 监听所有应用，
+  具体作用范围（白名单/黑名单）由应用内配置动态决定，可在任意聊天软件生效。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeViewTextChanged|typeViewClicked"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="50"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagDefault"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_description"/>

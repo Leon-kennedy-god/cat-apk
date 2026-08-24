@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="launcher_icon_background">#ffffff</color>
+    <color name="cat_background">#FFF8E1</color>
+    <color name="cat_title">#E65100</color>
+    <color name="cat_accent">#FF6F00</color>
+</resources>

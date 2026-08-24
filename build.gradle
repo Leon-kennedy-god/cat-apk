@@ -1,0 +1,4 @@
+// 顶层构建文件，为所有子模块声明共享插件版本
+plugins {
+    id 'com.android.application' version '8.4.2' apply false
+}
