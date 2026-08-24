@@ -46,12 +46,14 @@ public class MainActivity extends Activity {
     private CheckBox cbAppend;
     private CheckBox cbEmoticon;
     private CheckBox cbSendFallback;
+    private CheckBox cbOnlyFocused;
     private CatConfig config;
     private EditText etAppendText;
     private EditText etCustomEmoticons;
     private EditText etRules;
     private EditText etTargets;
     private EditText etExcludes;
+    private EditText etStableDelay;
     private CheckBox rbPunctuation;
     private CheckBox rbRealtime;
     private TextView statusText;
@@ -264,6 +266,37 @@ public class MainActivity extends Activity {
         this.etAppendText.setLayoutParams(etLp1);
         root.addView(this.etAppendText);
         this.cbEmoticon = addCheckbox(root, "句末颜文字", "在消息末尾附加随机颜文字", this.config.enableRandomEmoticon);
+
+        // ========== 高级设置（语音输入 / 提示词防护） ==========
+        TextView advTitle = new TextView(this);
+        advTitle.setText("高级设置");
+        advTitle.setTextSize(18.0f);
+        advTitle.setTextColor(Color.rgb(93, 64, 55));
+        advTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        advTitle.setPadding(0, 16, 0, 8);
+        root.addView(advTitle);
+        this.cbOnlyFocused = addCheckbox(root, "仅处理聚焦的输入框",
+                "防止把输入框提示词、后台未聚焦输入框的文字当作输入内容（推荐开启）",
+                this.config.onlyProcessFocused);
+        TextView delayLabel = new TextView(this);
+        delayLabel.setText("流式输入稳定防抖（毫秒）");
+        delayLabel.setTextSize(14.0f);
+        delayLabel.setTextColor(Color.rgb(51, 51, 51));
+        delayLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        delayLabel.setPadding(0, 8, 0, 0);
+        root.addView(delayLabel);
+        this.etStableDelay = new EditText(this);
+        this.etStableDelay.setInputType(2);
+        this.etStableDelay.setBackgroundColor(Color.WHITE);
+        this.etStableDelay.setPadding(16, 12, 16, 12);
+        this.etStableDelay.setText(String.valueOf(this.config.stableDelayMs));
+        root.addView(this.etStableDelay);
+        TextView delayHint = new TextView(this);
+        delayHint.setText("语音输入等流式识别时，等待输入停止 N 毫秒后再改写，避免改写未成型的文字。默认 800；填 0 关闭防抖（立即处理，语音输入时可能异常）");
+        delayHint.setTextSize(11.0f);
+        delayHint.setTextColor(Color.rgb(161, 136, 127));
+        delayHint.setPadding(0, 0, 0, 12);
+        root.addView(delayHint);
 
         // ========== 文本替换规则 ==========
         TextView ruleTitle = new TextView(this);
@@ -519,6 +552,18 @@ public class MainActivity extends Activity {
             this.config.targetPackages = splitLines(this.etTargets.getText() == null ? "" : this.etTargets.getText().toString());
             this.config.excludePackages = splitLines(this.etExcludes.getText() == null ? "" : this.etExcludes.getText().toString());
 
+            this.config.onlyProcessFocused = this.cbOnlyFocused.isChecked();
+            int delay = 800;
+            try {
+                delay = Integer.parseInt(this.etStableDelay.getText().toString().trim());
+            } catch (Exception e) {
+                delay = 800;
+            }
+            if (delay < 0) {
+                delay = 0;
+            }
+            this.config.stableDelayMs = delay;
+
             this.config.save(this);
             Toast.makeText(this, "设置已保存", 0).show();
         } catch (Exception e) {
@@ -556,6 +601,8 @@ public class MainActivity extends Activity {
                     + "\n断句追加：" + yn(testCfg.enableAppend) + "（" + (testCfg.appendText == null ? "" : testCfg.appendText) + "）"
                     + "\n句末颜文字：" + yn(testCfg.enableRandomEmoticon)
                     + "\n发送按钮兜底：" + yn(testCfg.enableSendFallback)
+                    + "\n仅处理聚焦输入框：" + yn(testCfg.onlyProcessFocused)
+                    + "\n流式防抖：" + testCfg.stableDelayMs + "ms"
                     + "\n替换规则：" + testCfg.rules.size() + " 条"
                     + "\n自定义颜文字：" + (testCfg.customEmoticons.length > 0 ? testCfg.customEmoticons.length + "个" : "使用内置")
                     + "\n\n原始：\n" + sample

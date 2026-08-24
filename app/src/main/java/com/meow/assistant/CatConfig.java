@@ -47,6 +47,8 @@ public class CatConfig {
     public static final String KEY_TARGET_PACKAGES = "target_packages";
     public static final String KEY_EXCLUDE_PACKAGES = "exclude_packages";
     public static final String KEY_ENABLE_SEND_FALLBACK = "enable_send_fallback";
+    public static final String KEY_ONLY_FOCUSED = "only_focused";
+    public static final String KEY_STABLE_DELAY = "stable_delay_ms";
     public static final String MODE_PUNCTUATION = "punctuation";
     public static final String MODE_REALTIME = "realtime";
     private static final String PREFS_NAME = "meow_config";
@@ -75,6 +77,10 @@ public class CatConfig {
     public String[] targetPackages = new String[0];
     public String[] excludePackages = new String[0];
     public boolean enableSendFallback = true;
+    /** 仅处理处于聚焦状态的输入框（防止误识别提示词/后台未聚焦输入框），默认开 */
+    public boolean onlyProcessFocused = true;
+    /** 流式输入稳定防抖（毫秒）：语音输入/候选词连续变化间隔小于此值时不处理，0=关闭 */
+    public int stableDelayMs = 800;
 
     public static Rule parseRule(String line) {
         if (line == null) {
@@ -127,6 +133,11 @@ public class CatConfig {
         cfg.enableRandomEmoticon = sp.getBoolean(KEY_ENABLE_EMOTICON, true);
         cfg.processingMode = sp.getString(KEY_PROCESSING_MODE, MODE_PUNCTUATION);
         cfg.enableSendFallback = sp.getBoolean(KEY_ENABLE_SEND_FALLBACK, true);
+        cfg.onlyProcessFocused = sp.getBoolean(KEY_ONLY_FOCUSED, true);
+        cfg.stableDelayMs = sp.getInt(KEY_STABLE_DELAY, 800);
+        if (cfg.stableDelayMs < 0) {
+            cfg.stableDelayMs = 0;
+        }
 
         String rulesStr = sp.getString(KEY_RULES, "");
         if (rulesStr != null && !rulesStr.trim().isEmpty()) {
@@ -189,6 +200,8 @@ public class CatConfig {
         ed.putString(KEY_TARGET_PACKAGES, join(this.targetPackages, "\n"));
         ed.putString(KEY_EXCLUDE_PACKAGES, join(this.excludePackages, "\n"));
         ed.putBoolean(KEY_ENABLE_SEND_FALLBACK, this.enableSendFallback);
+        ed.putBoolean(KEY_ONLY_FOCUSED, this.onlyProcessFocused);
+        ed.putInt(KEY_STABLE_DELAY, this.stableDelayMs);
         ed.apply();
     }
 

@@ -2,6 +2,7 @@ package com.meow.assistant;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
@@ -41,6 +42,8 @@ public class MeowAccessibilityService extends AccessibilityService {
     private String lastSet = "";
     private boolean processing = false;
     private long lastWriteTime = 0;
+    /** 上一次收到文本变化事件的时间（用于语音/候选词等流式输入防抖） */
+    private long lastTextChangeTime = 0;
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent e) {
@@ -58,11 +61,13 @@ public class MeowAccessibilityService extends AccessibilityService {
         }
         int type = e.getEventType();
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            // 窗口切换：清空跟踪状态，重新加载配置
+            // 窗口切换：清空跟踪状态，重新加载配置；防抖时钟从窗口变化时开始计时，
+            // 使面板刚弹出时的占位文本事件（提示词）落入防抖窗口而被跳过
             this.processing = false;
             this.userOriginal = "";
             this.lastSet = "";
             this.lastWriteTime = 0L;
+            this.lastTextChangeTime = System.currentTimeMillis();
             this.cachedConfig = CatConfig.load(this);
             return;
         }
@@ -79,11 +84,22 @@ public class MeowAccessibilityService extends AccessibilityService {
         }
         if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             if (CatConfig.MODE_REALTIME.equals(cfg.processingMode)) {
+                // 流式输入防抖（仅实时模式）：语音输入/输入法候选词会以极快频率连续触发
+                // 文本变化，若两次变化间隔小于 stableDelayMs，视为"输入尚未成型"，跳过，
+                // 等待输入停止（静默 stableDelayMs）后再改写，避免破坏未成型的语音识别结果。
+                // 标点模式不需要防抖：流式中间结果极少以标点结尾，且防抖会吞掉最后的触发事件。
+                long now = System.currentTimeMillis();
+                long gap = now - this.lastTextChangeTime;
+                this.lastTextChangeTime = now;
+                if (cfg.stableDelayMs > 0 && gap < cfg.stableDelayMs) {
+                    Log.d(TAG, "流式输入防抖跳过 (gap=" + gap + "ms)");
+                    return;
+                }
                 doProcess(false);
                 return;
             }
             // 标点触发模式：取当前输入框文本，句末为标点才处理
-            String raw = readEditableTextFromEvent(e);
+            String raw = readEditableTextFromEvent(e, cfg);
             if (raw == null || raw.trim().isEmpty()) {
                 return;
             }
@@ -94,14 +110,17 @@ public class MeowAccessibilityService extends AccessibilityService {
         }
     }
 
-    /** 从事件源（若为可编辑节点）读取文本；事件源不可用时回退到窗口树搜索 */
-    private String readEditableTextFromEvent(AccessibilityEvent e) {
+    /**
+     * 从事件源（若为可编辑节点）读取文本；事件源不可用时回退到窗口树搜索。
+     * 已集成防护：仅接受"可处理"节点（见 isUsableForInput），并排除提示词占位文本。
+     */
+    private String readEditableTextFromEvent(AccessibilityEvent e, CatConfig cfg) {
         AccessibilityNodeInfo src = e.getSource();
         if (src != null) {
             try {
-                if (src.isEditable() && !src.isPassword()) {
+                if (isUsableForInput(src, cfg)) {
                     CharSequence cs = src.getText();
-                    if (cs != null && cs.length() > 0) {
+                    if (cs != null && cs.length() > 0 && !isPlaceholderText(src, cs.toString())) {
                         return cs.toString();
                     }
                 }
@@ -114,11 +133,51 @@ public class MeowAccessibilityService extends AccessibilityService {
             return null;
         }
         try {
+            if (!isUsableForInput(inp, cfg)) {
+                return null;
+            }
             CharSequence cs = inp.getText();
-            return cs == null ? null : cs.toString();
+            if (cs == null || cs.length() == 0 || isPlaceholderText(inp, cs.toString())) {
+                return null;
+            }
+            return cs.toString();
         } finally {
             inp.recycle();
         }
+    }
+
+    /** 节点是否可用于输入处理：非空、非密码框、且（按配置）处于聚焦状态 */
+    private boolean isUsableForInput(AccessibilityNodeInfo n, CatConfig cfg) {
+        try {
+            if (n == null || n.isPassword()) {
+                return false;
+            }
+            if (cfg != null && cfg.onlyProcessFocused && !n.isFocused()) {
+                return false; // 未聚焦的输入框：里面的文字多半是提示词/占位内容
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 提示词检测：节点当前文本与其 hint（提示词）一致时，视为占位文本，不处理 */
+    private boolean isPlaceholderText(AccessibilityNodeInfo n, String text) {
+        if (n == null || text == null || text.trim().isEmpty()) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                CharSequence hint = n.getHintText();
+                if (hint != null && hint.length() > 0 && text.trim().equals(hint.toString().trim())) {
+                    Log.d(TAG, "提示词占位文本，跳过: " + text);
+                    return true;
+                }
+            } catch (Exception e) {
+                // 忽略 hint 读取异常
+            }
+        }
+        return false;
     }
 
     private boolean isPunctuationEnding(String s) {
@@ -134,8 +193,16 @@ public class MeowAccessibilityService extends AccessibilityService {
             return;
         }
         this.processing = true;
+        CatConfig cfg = this.cachedConfig;
+        if (cfg == null) {
+            cfg = CatConfig.load(this);
+            this.cachedConfig = cfg;
+        }
         AccessibilityNodeInfo inp = findEditableInAppWindows();
-        if (inp == null) {
+        if (inp == null || !isUsableForInput(inp, cfg)) {
+            if (inp != null) {
+                inp.recycle();
+            }
             this.processing = false;
             return;
         }
@@ -148,17 +215,12 @@ public class MeowAccessibilityService extends AccessibilityService {
             return;
         }
         String raw = cs.toString().trim();
-        if (raw.isEmpty()) {
+        if (raw.isEmpty() || isPlaceholderText(inp, raw)) {
             inp.recycle();
             this.processing = false;
             this.userOriginal = "";
             this.lastSet = "";
             return;
-        }
-        CatConfig cfg = this.cachedConfig;
-        if (cfg == null) {
-            cfg = CatConfig.load(this);
-            this.cachedConfig = cfg;
         }
         long now = System.currentTimeMillis();
         long j = this.lastWriteTime;
@@ -251,8 +313,10 @@ public class MeowAccessibilityService extends AccessibilityService {
         return result.replaceAll("\\s*[\\p{S}\\p{So}\\p{Sm}\\p{Sk}\\p{P}]{3,}\\s*", " ").trim();
     }
 
-    /** 在非输入法、非覆盖层的应用窗口中查找可编辑输入框（通用版核心检索逻辑） */
+    /** 在非输入法、非覆盖层的应用窗口中查找可编辑输入框（通用版核心检索逻辑）。
+     *  whenFocusRequired=true 时只接受聚焦输入框（防止误取提示词/后台输入框）。 */
     private AccessibilityNodeInfo findEditableInAppWindows() {
+        CatConfig cfg = cachedConfig != null ? cachedConfig : CatConfig.load(this);
         List<AccessibilityWindowInfo> windows = getWindows();
         if (windows != null) {
             for (AccessibilityWindowInfo w : windows) {
@@ -271,11 +335,13 @@ public class MeowAccessibilityService extends AccessibilityService {
                 try {
                     String wpkg = root.getPackageName() != null ? root.getPackageName().toString() : "";
                     if (!wpkg.isEmpty() && !wpkg.equals(getPackageName())) {
-                        CatConfig cfg = cachedConfig != null ? cachedConfig : CatConfig.load(this);
                         if (cfg.shouldHandlePackage(wpkg)) {
-                            AccessibilityNodeInfo found = findEditable(root);
-                            if (found != null) {
+                            AccessibilityNodeInfo found = findEditable(root, cfg.onlyProcessFocused);
+                            if (found != null && isUsableForInput(found, cfg)) {
                                 return found;
+                            }
+                            if (found != null) {
+                                found.recycle();
                             }
                         }
                     }
@@ -290,9 +356,14 @@ public class MeowAccessibilityService extends AccessibilityService {
                 // 兜底同样受作用范围约束：活动窗口可能是输入法，绝不允许误改
                 String wpkg = root.getPackageName() != null ? root.getPackageName().toString() : "";
                 if (!wpkg.isEmpty() && !wpkg.equals(getPackageName())) {
-                    CatConfig cfg = cachedConfig != null ? cachedConfig : CatConfig.load(this);
                     if (cfg.shouldHandlePackage(wpkg)) {
-                        return findEditable(root);
+                        AccessibilityNodeInfo found = findEditable(root, cfg.onlyProcessFocused);
+                        if (found != null && isUsableForInput(found, cfg)) {
+                            return found;
+                        }
+                        if (found != null) {
+                            found.recycle();
+                        }
                     }
                 }
             } finally {
@@ -302,18 +373,21 @@ public class MeowAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    /** 深度优先查找可编辑节点：isEditable 优先，类名兜底（EditText 系 / Compose / 输入型节点），跳过密码框 */
-    private AccessibilityNodeInfo findEditable(AccessibilityNodeInfo n) {
+    /** 深度优先查找可编辑节点：isEditable 优先，类名兜底（EditText 系 / Compose / 输入型节点），跳过密码框。
+     *  focusedOnly=true 时只匹配处于聚焦状态的节点。 */
+    private AccessibilityNodeInfo findEditable(AccessibilityNodeInfo n, boolean focusedOnly) {
         if (n == null) {
             return null;
         }
         if (isEditableNode(n)) {
-            return AccessibilityNodeInfo.obtain(n);
+            if (!focusedOnly || isFocusedSafe(n)) {
+                return AccessibilityNodeInfo.obtain(n);
+            }
         }
         for (int i = 0; i < n.getChildCount(); i++) {
             AccessibilityNodeInfo c = n.getChild(i);
             if (c != null) {
-                AccessibilityNodeInfo r = findEditable(c);
+                AccessibilityNodeInfo r = findEditable(c, focusedOnly);
                 c.recycle();
                 if (r != null) {
                     return r;
@@ -321,6 +395,14 @@ public class MeowAccessibilityService extends AccessibilityService {
             }
         }
         return null;
+    }
+
+    private boolean isFocusedSafe(AccessibilityNodeInfo n) {
+        try {
+            return n.isFocused();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private boolean isEditableNode(AccessibilityNodeInfo n) {

@@ -39,14 +39,14 @@ if errorlevel 1 echo WARNING: description update failed (check description.json)
 gh repo edit %REPO% --add-topic android --add-topic accessibility-service --add-topic text-transformer --add-topic chat-assistant --add-topic qq --add-topic wechat --add-topic telegram --add-topic agpl-3-0 >nul 2>&1
 if errorlevel 1 echo WARNING: topics update failed (ignored).
 
-echo [6/6] Create Release v1.0 with APK...
-for /f "delims=" %%f in ('dir /b "dist\*.apk" 2^>nul') do set "APKFILE=dist\%%f"
-if defined APKFILE (
-    echo Uploading %APKFILE%
-    gh release create v1.0 "%APKFILE%" --notes-file RELEASE_NOTES.md --repo %REPO% >nul 2>&1
-    if errorlevel 1 echo WARNING: release creation failed (tag may already exist; create manually).
+echo [6/6] Create Release v1.1 with APK...
+rem Upload the freshly built APK (build.bat must be run first)
+if not exist "app\build\outputs\apk\debug\app-debug.apk" (
+    echo WARNING: no built APK found. Run build.bat first, then rerun this script.
 ) else (
-    echo ERROR: no APK found under dist\
+    copy /y "app\build\outputs\apk\debug\app-debug.apk" "dist\app-debug-v1.1.apk" >nul
+    gh release create v1.1 "dist/app-debug-v1.1.apk" --notes-file RELEASE_NOTES.md --repo %REPO% >nul 2>&1
+    if errorlevel 1 echo WARNING: release creation failed (tag may already exist; create manually).
 )
 
 echo.
