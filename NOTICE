@@ -1,0 +1,37 @@
+MeowMeowAssistant（喵喵助手）
+============================
+
+本文件是 GNU Affero General Public License v3.0（AGPL-3.0）所要求的
+「NOTICE / 修改声明」文件，说明本项目的衍生关系与修改内容。
+
+上游项目
+--------
+项目名称：QQMiaoAssistant（QQ 文本改写助手）
+上游仓库：https://github.com/QiCaiJie114514/QQMiaoAssistant
+上游授权：GNU Affero General Public License v3.0（AGPL-3.0）
+上游说明：由未知作者的「QQ喵喵助手」APK 逆向重建的可编译工程；
+          仅可在 QQ（com.tencent.mobileqq / com.tencent.mobileqqi）中生效。
+
+本项目的衍生性质
+----------------
+本仓库（MeowMeowAssistant / 喵喵助手）是上游 QQMiaoAssistant 的
+功能扩张（二次开发衍生）项目，非独立原创软件。
+
+对本项目作出的修改（vs 上游）
+------------------------------
+1. 删除无障碍服务对 QQ 包名的写死限制（accessibility_service_config.xml
+   与 onServiceConnected 中的 packageNames），改为由 CatConfig 动态决定
+   作用范围：目标应用白名单（留空=所有应用）+ 排除黑名单；
+2. 输入框检索由硬编码 View ID（com.tencent.mobileqq:id/input）改为通用
+   "可编辑节点"查找（isEditable / EditText 类名），并跳过输入法(IME)窗口
+   与密码框；
+3. 发送按钮兜底由 QQ 专属 View ID（send_btn）改为通用发送关键词识别，
+   并增加开关；
+4. 应用名改为「喵喵助手」，包名改为 com.meow.assistant；
+5. 其余（TextProcessor 改写引擎、配置模型、控制面板等）与上游保持一致。
+
+联系与合规
+----------
+- 上游作者联系 QQ：1670534177（上游仓库公开信息）
+- 若上游作者或原著作权人认为本仓库侵权，请联系本仓库维护者（可通过
+  GitHub Issues），将立即下架、署名或按要求整改。

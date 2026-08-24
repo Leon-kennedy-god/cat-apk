@@ -1,5 +1,8 @@
 # 逆向工程说明（REVERSE.md）
 
+> 本仓库为上游 [QQMiaoAssistant](https://github.com/QiCaiJie114514/QQMiaoAssistant) 的
+> **功能扩张（二次开发衍生）项目**，衍生关系与合规声明见 [README.md](README.md) 顶部与 [NOTICE](NOTICE)。
+
 本文档记录对 [QQMiaoAssistant](https://github.com/QiCaiJie114514/QQMiaoAssistant) 的逆向分析过程，
 以及"喵喵助手"通用化改造的逐文件对照。
 

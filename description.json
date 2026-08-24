@@ -1,0 +1,1 @@
+{"description": "喵喵助手 MeowMeowAssistant：QQMiaoAssistant 的功能扩张通用版。基于 Android 无障碍服务，将 QQ 专属文本改写（自定义替换规则/断句追加/随机颜文字）扩张为任意聊天软件（QQ/微信/Telegram/WhatsApp/钉钉/Discord/飞书/Slack 等）输入框内生效。含目标应用白名单/黑名单、输入法与密码框保护、发送兜底；纯原生 API 零依赖；AGPL-3.0。本仓库为上游 QiCaiJie114514/QQMiaoAssistant 的二次开发衍生项目。"}
