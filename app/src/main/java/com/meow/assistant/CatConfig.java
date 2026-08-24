@@ -42,6 +42,7 @@ public class CatConfig {
     public static final String KEY_ENABLE_APPEND = "enable_append";
     public static final String KEY_APPEND_TEXT = "append_text";
     public static final String KEY_ENABLE_EMOTICON = "enable_emoticon";
+    public static final String KEY_CUSTOM_EMOTICONS = "custom_emoticons";
     public static final String KEY_PROCESSING_MODE = "processing_mode";
     public static final String KEY_TARGET_PACKAGES = "target_packages";
     public static final String KEY_EXCLUDE_PACKAGES = "exclude_packages";

@@ -405,7 +405,8 @@ public class MeowAccessibilityService extends AccessibilityService {
                 | AccessibilityEvent.TYPE_VIEW_CLICKED
                 | AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED;
         i.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC;
-        i.flags = AccessibilityServiceInfo.FLAG_DEFAULT
+        // FLAG_DEFAULT 无公开常量（值 1）：与原版 flags=81 等价
+        i.flags = 0x00000001
                 | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                 | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
         i.notificationTimeout = 50L;
