@@ -21,6 +21,12 @@
 > 同样的文本改写效果（替换规则 → 断句追加 → 随机颜文字），但**不再受限于 QQ**——
 > 可在任意聊天软件（微信、Telegram、WhatsApp、钉钉、Discord、飞书、Slack、LINE 等）的输入框内生效。
 
+## 📥 下载 APK（Android）
+
+- **最新版直链**：[喵喵助手 v1.1 APK](https://github.com/Leon-kennedy-god/cat-apk/releases/download/v1.1/app-debug-v1.1.apk)（点击即可下载安装）
+- **Releases 页面**：https://github.com/Leon-kennedy-god/cat-apk/releases/latest （查看全部版本与更新日志）
+- 安装后请前往系统「无障碍」设置开启「喵喵助手（任意聊天软件文本改写）」
+
 ## 功能简介（全面）
 
 喵喵助手是一款基于 **Android 无障碍服务（Accessibility Service）** 的文本改写工具：
