@@ -44,6 +44,12 @@ public class MeowAccessibilityService extends AccessibilityService {
     private long lastWriteTime = 0;
     /** 上一次收到文本变化事件的时间（用于语音/候选词等流式输入防抖） */
     private long lastTextChangeTime = 0;
+    /** 最近一次观察到"输入框文本变空"的时间与包名（用于提示词防护） */
+    private long lastEmptyObservedTime = 0;
+    private String lastEmptyPkg = "";
+    /** 最近一次点击发送按钮的时间与包名（用于提示词防护） */
+    private long sendResetUntil = 0;
+    private String sendResetPkg = "";
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent e) {
@@ -76,6 +82,8 @@ public class MeowAccessibilityService extends AccessibilityService {
             if (src != null) {
                 if (cfg.enableSendFallback && isSendButton(src)) {
                     Log.d(TAG, "点击发送按钮，兜底处理");
+                    this.sendResetUntil = System.currentTimeMillis();
+                    this.sendResetPkg = pkg;
                     doProcess(true);
                 }
                 src.recycle();
@@ -83,6 +91,23 @@ public class MeowAccessibilityService extends AccessibilityService {
             return;
         }
         if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+            // ===== 官方提示词防护（事件级） =====
+            // 抖音等应用把提示词作为节点文本写入，且清空/发送后输入框仍是聚焦状态，
+            // 之前的"仅聚焦/hint 相等"防护失效。关键特征：提示词是"文本刚变空之后"
+            // （或发送按钮刚点击之后）由应用程序化写入的短文本。
+            CharSequence beforeCs = e.getBeforeText();
+            CharSequence afterCs = (e.getText() != null && e.getText().size() > 0) ? e.getText().get(0) : null;
+            boolean beforeEmpty = beforeCs == null || beforeCs.length() == 0;
+            boolean afterEmpty = afterCs == null || afterCs.length() == 0;
+            long nowMs = System.currentTimeMillis();
+            if (afterEmpty) {
+                // 记录"输入框刚变空"：清空文字/发送后清空都会触发
+                this.lastEmptyObservedTime = nowMs;
+                this.lastEmptyPkg = pkg;
+            } else if (beforeEmpty && isSuspectedPlaceholder(afterCs.toString(), pkg, nowMs)) {
+                Log.d(TAG, "疑似官方提示词（刚清空/刚发送后出现的短文本），跳过: " + afterCs);
+                return;
+            }
             if (CatConfig.MODE_REALTIME.equals(cfg.processingMode)) {
                 // 流式输入防抖（仅实时模式）：语音输入/输入法候选词会以极快频率连续触发
                 // 文本变化，若两次变化间隔小于 stableDelayMs，视为"输入尚未成型"，跳过，
@@ -178,6 +203,27 @@ public class MeowAccessibilityService extends AccessibilityService {
             }
         }
         return false;
+    }
+
+    /**
+     * 官方提示词判定（事件级）：文本从"空"变为"非空"的短文本（3~40 字），且发生在
+     * 同一应用"输入框刚变空"或"刚点击发送"之后的 3 秒内 —— 几乎可以肯定是应用
+     * 程序化写入的提示词（如"说点什么吧"），而不是用户输入。
+     * 用户真实输入的特征是逐个字符/逐段提交，且首个字符事件即使被误判，下一事件
+     * （beforeText 非空）即可正常处理，发送按钮兜底也保证最终改写不丢失。
+     */
+    private boolean isSuspectedPlaceholder(String text, String pkg, long now) {
+        if (text == null) {
+            return false;
+        }
+        String t = text.trim();
+        int len = t.length();
+        if (len < 3 || len > 40) {
+            return false; // 提示词通常很短；过长的文本一定是真实内容
+        }
+        boolean recentEmpty = pkg.equals(this.lastEmptyPkg) && (now - this.lastEmptyObservedTime) < 3000;
+        boolean recentSend = pkg.equals(this.sendResetPkg) && now < this.sendResetUntil + 3000;
+        return recentEmpty || recentSend;
     }
 
     private boolean isPunctuationEnding(String s) {
