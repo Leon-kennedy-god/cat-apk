@@ -39,7 +39,7 @@ if errorlevel 1 echo WARNING: description update failed.
 gh repo edit %REPO% --add-topic android --add-topic accessibility-service --add-topic text-transformer --add-topic chat-assistant --add-topic qq --add-topic wechat --add-topic telegram --add-topic agpl-3-0 >nul 2>&1
 if errorlevel 1 echo WARNING: topics update failed.
 
-echo [6/6] Create Release v1.1.1 with APK...
+echo [6/6] Create Release v1.1.2 with APK...
 if not exist "app\build\outputs\apk\debug\app-debug.apk" (
     echo ERROR: APK not found. Run build.bat FIRST, then rerun this script.
     pause
@@ -47,10 +47,10 @@ if not exist "app\build\outputs\apk\debug\app-debug.apk" (
 )
 rem Stable asset name: direct URL never breaks across versions
 copy /y "app\build\outputs\apk\debug\app-debug.apk" "dist\MeowMeowAssistant.apk" >nul
-rem Remove any stale v1.1.1 release/tag so creation always succeeds
-gh release delete v1.1.1 --yes >nul 2>&1
-git push origin :refs/tags/v1.1.1 >nul 2>&1
-gh release create v1.1.1 "dist/MeowMeowAssistant.apk" --notes-file RELEASE_NOTES.md --repo %REPO%
+rem Remove any stale v1.1.2 release/tag so creation always succeeds
+gh release delete v1.1.2 --yes >nul 2>&1
+git push origin :refs/tags/v1.1.2 >nul 2>&1
+gh release create v1.1.2 "dist/MeowMeowAssistant.apk" --notes-file RELEASE_NOTES.md --repo %REPO%
 if errorlevel 1 (
     echo ERROR: release creation failed. See message above.
     pause

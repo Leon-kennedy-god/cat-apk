@@ -35,7 +35,14 @@ public class MeowAccessibilityService extends AccessibilityService {
     private static final String TAG = "MeowSvc";
 
     /** 发送按钮关键词：节点文本或内容描述命中任一即视为"发送"（可开关，默认开） */
-    private static final String[] SEND_KEYWORDS = {"发送", "送出", "提交", "send", "submit", "enter", "➤"};
+    private static final String[] SEND_KEYWORDS = {"发送", "送出", "提交", "发表", "发布", "回复", "评论", "send", "submit", "enter", "post", "reply", "comment", "ok", "done", "➤"};
+
+    /** 高信号提示词子串：命中即大概率是应用官方提示词（如"说点什么吧"），不依赖任何时序 */
+    private static final String[] PLACEHOLDER_PATTERNS = {
+            "说点什么", "说两句", "说点啥", "输入消息", "写评论", "添加评论",
+            "发个友善的", "善语结善缘", "请输入", "评论一下", "留下你的",
+            "说说你的", "留言", "吐槽一下", "回复一下", "讲两句", "想说什么"
+    };
 
     private CatConfig cachedConfig;
     private String userOriginal = "";
@@ -50,6 +57,12 @@ public class MeowAccessibilityService extends AccessibilityService {
     /** 最近一次点击发送按钮的时间与包名（用于提示词防护） */
     private long sendResetUntil = 0;
     private String sendResetPkg = "";
+    /** 最近一次被拦截的提示词文本与包名（10 秒内精确匹配兜底） */
+    private String lastPlaceholderText = "";
+    private String lastPlaceholderPkg = "";
+    private long lastPlaceholderTime = 0;
+    /** 最近一次找到的输入框所属包名（doProcess 提示词防护用） */
+    private String lastInputPkg = "";
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent e) {
@@ -92,20 +105,17 @@ public class MeowAccessibilityService extends AccessibilityService {
         }
         if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             // ===== 官方提示词防护（事件级） =====
-            // 抖音等应用把提示词作为节点文本写入，且清空/发送后输入框仍是聚焦状态，
-            // 之前的"仅聚焦/hint 相等"防护失效。关键特征：提示词是"文本刚变空之后"
-            // （或发送按钮刚点击之后）由应用程序化写入的短文本。
-            CharSequence beforeCs = e.getBeforeText();
+            // 抖音等应用把提示词作为节点文本写入，且清空/发送后输入框仍是聚焦状态。
+            // 特征：提示词是"文本刚变空/刚发送/刚点击"之后的短文本，或命中提示词模式库。
+            // 注意：不能要求"变化前为空"——很多应用把 删除→提示词 合并成一步替换事件。
             CharSequence afterCs = (e.getText() != null && e.getText().size() > 0) ? e.getText().get(0) : null;
-            boolean beforeEmpty = beforeCs == null || beforeCs.length() == 0;
             boolean afterEmpty = afterCs == null || afterCs.length() == 0;
             long nowMs = System.currentTimeMillis();
             if (afterEmpty) {
-                // 记录"输入框刚变空"：清空文字/发送后清空都会触发
-                this.lastEmptyObservedTime = nowMs;
-                this.lastEmptyPkg = pkg;
-            } else if (beforeEmpty && isSuspectedPlaceholder(afterCs.toString(), pkg, nowMs)) {
-                Log.d(TAG, "疑似官方提示词（刚清空/刚发送后出现的短文本），跳过: " + afterCs);
+                noteEmpty(pkg, nowMs);
+            } else if (isPlaceholderLike(afterCs.toString(), pkg, nowMs, true)) {
+                Log.d(TAG, "事件级拦截疑似提示词: " + afterCs);
+                rememberPlaceholder(afterCs.toString(), pkg, nowMs);
                 return;
             }
             if (CatConfig.MODE_REALTIME.equals(cfg.processingMode)) {
@@ -124,7 +134,7 @@ public class MeowAccessibilityService extends AccessibilityService {
                 return;
             }
             // 标点触发模式：取当前输入框文本，句末为标点才处理
-            String raw = readEditableTextFromEvent(e, cfg);
+            String raw = readEditableTextFromEvent(e, cfg, pkg);
             if (raw == null || raw.trim().isEmpty()) {
                 return;
             }
@@ -137,16 +147,20 @@ public class MeowAccessibilityService extends AccessibilityService {
 
     /**
      * 从事件源（若为可编辑节点）读取文本；事件源不可用时回退到窗口树搜索。
-     * 已集成防护：仅接受"可处理"节点（见 isUsableForInput），并排除提示词占位文本。
+     * 已集成防护：仅接受"可处理"节点（见 isUsableForInput），并排除提示词文本。
      */
-    private String readEditableTextFromEvent(AccessibilityEvent e, CatConfig cfg) {
+    private String readEditableTextFromEvent(AccessibilityEvent e, CatConfig cfg, String pkg) {
+        long now = System.currentTimeMillis();
         AccessibilityNodeInfo src = e.getSource();
         if (src != null) {
             try {
                 if (isUsableForInput(src, cfg)) {
                     CharSequence cs = src.getText();
-                    if (cs != null && cs.length() > 0 && !isPlaceholderText(src, cs.toString())) {
-                        return cs.toString();
+                    if (cs != null && cs.length() > 0) {
+                        String text = cs.toString();
+                        if (!isPlaceholderText(src, text) && !isPlaceholderLike(text, pkg, now, true)) {
+                            return text;
+                        }
                     }
                 }
             } finally {
@@ -162,13 +176,85 @@ public class MeowAccessibilityService extends AccessibilityService {
                 return null;
             }
             CharSequence cs = inp.getText();
-            if (cs == null || cs.length() == 0 || isPlaceholderText(inp, cs.toString())) {
+            if (cs == null || cs.length() == 0) {
+                noteEmpty(pkg, now);
                 return null;
             }
-            return cs.toString();
+            String text = cs.toString();
+            if (isPlaceholderText(inp, text) || isPlaceholderLike(text, pkg, now, true)) {
+                rememberPlaceholder(text, pkg, now);
+                return null;
+            }
+            return text;
         } finally {
             inp.recycle();
         }
+    }
+
+    /** 记录"输入框文本为空"的观察（事件/读取/处理任意路径），用于提示词时序判定 */
+    private void noteEmpty(String pkg, long now) {
+        this.lastEmptyObservedTime = now;
+        this.lastEmptyPkg = pkg;
+    }
+
+    /** 记录被拦截的提示词文本，10 秒内对完全相同文本做精确匹配兜底 */
+    private void rememberPlaceholder(String text, String pkg, long now) {
+        this.lastPlaceholderText = text;
+        this.lastPlaceholderPkg = pkg;
+        this.lastPlaceholderTime = now;
+    }
+
+    /**
+     * 官方提示词综合判定（事件/读取路径）：短文本（2~40 字）且满足任一条件：
+     *  - 同一应用"输入框刚变空/刚点击发送"3 秒内出现（时序信号）；
+     *  - 10 秒内曾被拦截过的完全相同文本（精确记忆兜底）；
+     *  - 命中高信号提示词模式库（说点什么/写评论/善语结善缘…）。
+     */
+    private boolean isPlaceholderLike(String text, String pkg, long now, boolean allowTiming) {
+        if (text == null) {
+            return false;
+        }
+        if (allowTiming) {
+            boolean recentEmpty = pkg.equals(this.lastEmptyPkg) && (now - this.lastEmptyObservedTime) < 3000;
+            boolean recentSend = pkg.equals(this.sendResetPkg) && now < this.sendResetUntil + 3000;
+            if (recentEmpty || recentSend) {
+                return true;
+            }
+        }
+        return isPlaceholderMemory(text, pkg, now) || isPlaceholderPattern(text);
+    }
+
+    /** 10 秒内曾被拦截过的完全相同文本（精确记忆兜底） */
+    private boolean isPlaceholderMemory(String text, String pkg, long now) {
+        if (text == null) {
+            return false;
+        }
+        String t = text.trim();
+        int len = t.length();
+        if (len < 2 || len > 40) {
+            return false;
+        }
+        return pkg.equals(this.lastPlaceholderPkg)
+                && now - this.lastPlaceholderTime < 10000
+                && t.equals(this.lastPlaceholderText);
+    }
+
+    /** 高信号提示词模式：短文本且命中模式库 */
+    private boolean isPlaceholderPattern(String text) {
+        if (text == null) {
+            return false;
+        }
+        String t = text.trim();
+        int len = t.length();
+        if (len < 2 || len > 40) {
+            return false; // 提示词都是短文本；过长的文本一定是真实内容
+        }
+        for (String p : PLACEHOLDER_PATTERNS) {
+            if (t.contains(p)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 节点是否可用于输入处理：非空、非密码框、且（按配置）处于聚焦状态 */
@@ -205,27 +291,6 @@ public class MeowAccessibilityService extends AccessibilityService {
         return false;
     }
 
-    /**
-     * 官方提示词判定（事件级）：文本从"空"变为"非空"的短文本（3~40 字），且发生在
-     * 同一应用"输入框刚变空"或"刚点击发送"之后的 3 秒内 —— 几乎可以肯定是应用
-     * 程序化写入的提示词（如"说点什么吧"），而不是用户输入。
-     * 用户真实输入的特征是逐个字符/逐段提交，且首个字符事件即使被误判，下一事件
-     * （beforeText 非空）即可正常处理，发送按钮兜底也保证最终改写不丢失。
-     */
-    private boolean isSuspectedPlaceholder(String text, String pkg, long now) {
-        if (text == null) {
-            return false;
-        }
-        String t = text.trim();
-        int len = t.length();
-        if (len < 3 || len > 40) {
-            return false; // 提示词通常很短；过长的文本一定是真实内容
-        }
-        boolean recentEmpty = pkg.equals(this.lastEmptyPkg) && (now - this.lastEmptyObservedTime) < 3000;
-        boolean recentSend = pkg.equals(this.sendResetPkg) && now < this.sendResetUntil + 3000;
-        return recentEmpty || recentSend;
-    }
-
     private boolean isPunctuationEnding(String s) {
         if (s == null || s.isEmpty()) {
             return false;
@@ -252,12 +317,15 @@ public class MeowAccessibilityService extends AccessibilityService {
             this.processing = false;
             return;
         }
+        String inputPkg = this.lastInputPkg;
         CharSequence cs = inp.getText();
+        long now = System.currentTimeMillis();
         if (cs == null || cs.length() == 0) {
             inp.recycle();
             this.processing = false;
             this.userOriginal = "";
             this.lastSet = "";
+            noteEmpty(inputPkg, now);
             return;
         }
         String raw = cs.toString().trim();
@@ -266,9 +334,25 @@ public class MeowAccessibilityService extends AccessibilityService {
             this.processing = false;
             this.userOriginal = "";
             this.lastSet = "";
+            noteEmpty(inputPkg, now);
             return;
         }
-        long now = System.currentTimeMillis();
+        // 处理级提示词兜底（严格模式）：只认"记忆匹配"（事件级已拦截过的相同文本），
+        // 或"模式命中 + 输入框刚被清空"（此时才可能是提示词）——
+        // 避免发送兜底把用户刚打的真实短消息误判为提示词
+        boolean placeholderHit = isPlaceholderMemory(raw, inputPkg, now)
+                || (isPlaceholderPattern(raw)
+                    && inputPkg.equals(this.lastEmptyPkg)
+                    && (now - this.lastEmptyObservedTime) < 3000);
+        if (placeholderHit) {
+            Log.d(TAG, "处理级拦截疑似提示词: " + raw);
+            rememberPlaceholder(raw, inputPkg, now);
+            inp.recycle();
+            this.processing = false;
+            this.userOriginal = "";
+            this.lastSet = "";
+            return;
+        }
         long j = this.lastWriteTime;
         if (j > 0 && now - j < 600 && raw.equals(this.lastSet)) {
             Log.d(TAG, "写入回显跳过");
@@ -384,6 +468,7 @@ public class MeowAccessibilityService extends AccessibilityService {
                         if (cfg.shouldHandlePackage(wpkg)) {
                             AccessibilityNodeInfo found = findEditable(root, cfg.onlyProcessFocused);
                             if (found != null && isUsableForInput(found, cfg)) {
+                                this.lastInputPkg = wpkg;
                                 return found;
                             }
                             if (found != null) {
@@ -405,6 +490,7 @@ public class MeowAccessibilityService extends AccessibilityService {
                     if (cfg.shouldHandlePackage(wpkg)) {
                         AccessibilityNodeInfo found = findEditable(root, cfg.onlyProcessFocused);
                         if (found != null && isUsableForInput(found, cfg)) {
+                            this.lastInputPkg = wpkg;
                             return found;
                         }
                         if (found != null) {
