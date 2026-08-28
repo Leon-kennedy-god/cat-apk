@@ -113,7 +113,7 @@ public class MeowAccessibilityService extends AccessibilityService {
                     Log.d(TAG, "点击发送按钮，兜底处理");
                     this.sendResetUntil = System.currentTimeMillis();
                     this.sendResetPkg = pkg;
-                    doProcess(true, null);
+                    doProcess(true, null, true);
                 }
                 src.recycle();
             }
@@ -155,7 +155,7 @@ public class MeowAccessibilityService extends AccessibilityService {
                     return;
                 }
                 this.lastInputPkg = pkg;
-                doProcess(false, src);
+                doProcess(false, src, true);
                 return;
             }
             // 标点触发模式：取当前输入框文本，句末为标点才处理
@@ -178,7 +178,7 @@ public class MeowAccessibilityService extends AccessibilityService {
             if (raw != null) {
                 Log.d(TAG, "标点触发: " + raw.trim());
                 this.lastInputPkg = pkg;
-                doProcess(false, src);
+                doProcess(false, src, true);
             }
         }
     }
@@ -291,7 +291,7 @@ public class MeowAccessibilityService extends AccessibilityService {
         return last == 12290 || last == 65281 || last == '!' || last == 65311 || last == '?' || last == ' ';
     }
 
-    private void doProcess(boolean isSendClick, AccessibilityNodeInfo inp) {
+    private void doProcess(boolean isSendClick, AccessibilityNodeInfo inp, boolean requireFocus) {
         if (this.processing) {
             if (inp != null) {
                 inp.recycle(); // 入口被占用时，释放本次传入的节点
@@ -311,7 +311,21 @@ public class MeowAccessibilityService extends AccessibilityService {
         }
         // 只在"可编辑 + 聚焦"的输入框上改写：事件源即用户正编辑的字段，
         // 兜底扫描同样必须聚焦——绝不把文本写进未聚焦的搜索栏/占位字段。
-        if (inp == null || !isEditableNode(inp) || !isUsableForInput(inp, cfg)) {
+        boolean usable;
+        if (inp == null) {
+            usable = false;
+        } else if (requireFocus) {
+            usable = isUsableForInput(inp, cfg);
+        } else {
+            boolean pw;
+            try {
+                pw = inp.isPassword();
+            } catch (Exception e) {
+                pw = true;
+            }
+            usable = !pw;
+        }
+        if (inp == null || !isEditableNode(inp) || !usable) {
             if (inp != null) {
                 inp.recycle();
             }
@@ -391,6 +405,8 @@ public class MeowAccessibilityService extends AccessibilityService {
             if (ok) {
                 this.lastSet = target;
                 this.lastWriteTime = System.currentTimeMillis();
+            } else {
+                Log.w(TAG, "ACTION_SET_TEXT 写入失败(可能被应用屏蔽) cls=" + safeClassName(inp) + " target=" + target);
             }
         } else {
             this.lastSet = target;
@@ -640,7 +656,7 @@ public class MeowAccessibilityService extends AccessibilityService {
         super.onDestroy();
     }
 
-    /** 轮询兜底：微信等应用可能屏蔽文本变化事件，改为定期读取前台可编辑输入框进行改写 */
+    /** 轮询兜底：微信等应用可能屏蔽文本变化事件，改为定期扫描前台窗口的可编辑输入框进行改写 */
     private void pollForegroundInput() {
         if (processing) {
             return;
@@ -655,52 +671,119 @@ public class MeowAccessibilityService extends AccessibilityService {
         if (this.lastTextChangeTime > 0 && now - this.lastTextChangeTime < cfg.stableDelayMs) {
             return;
         }
-        AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) {
+        // 微信等应用里输入法(IME)弹出后 getRootInActiveWindow() 可能返回 IME 窗口，
+        // 导致漏掉真正的前台聊天窗口。改为遍历所有窗口，跳过 IME / 无障碍覆盖层。
+        AccessibilityNodeInfo inp = null;
+        String wpkg = null;
+        boolean fallback = false;
+        List<AccessibilityWindowInfo> windows = getWindows();
+        if (windows != null) {
+            for (AccessibilityWindowInfo w : windows) {
+                if (w == null) {
+                    continue;
+                }
+                int wt = w.getType();
+                if (wt == AccessibilityWindowInfo.TYPE_INPUT_METHOD
+                        || wt == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) {
+                    continue;
+                }
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root == null) {
+                    continue;
+                }
+                try {
+                    CharSequence pk = root.getPackageName();
+                    String p = pk != null ? pk.toString() : "";
+                    if (p.isEmpty() || p.equals(getPackageName()) || !cfg.shouldHandlePackage(p)) {
+                        continue;
+                    }
+                    // 微信等自定义输入框的 isFocused() 可能恒为 false，先聚焦找，再放宽兜底
+                    AccessibilityNodeInfo cand = findEditable(root, /*focusedOnly*/ true);
+                    if (cand == null) {
+                        cand = findEditableIfOnlyOne(root);
+                        fallback = (cand != null);
+                    }
+                    if (cand == null) {
+                        continue;
+                    }
+                    inp = cand;
+                    wpkg = p;
+                    Log.d(TAG, "轮询命中输入框 pkg=" + p + " cls=" + safeClassName(cand)
+                            + " focused=" + isFocusedSafe(cand) + " editable=" + isEditableNode(cand)
+                            + " fallback=" + fallback);
+                    break;
+                } finally {
+                    root.recycle();
+                }
+            }
+        }
+        if (inp == null) {
             return;
         }
         try {
-            CharSequence pk = root.getPackageName();
-            String wpkg = pk != null ? pk.toString() : "";
-            if (wpkg.isEmpty() || wpkg.equals(getPackageName())
-                    || !cfg.shouldHandlePackage(wpkg)) {
+            CharSequence cs = inp.getText();
+            if (cs == null || cs.length() == 0) {
+                return; // 空输入交给事件路径记录，轮询只做只读 diff，不干扰提示词时序
+            }
+            String raw = cs.toString();
+            if (raw.isEmpty() || isPlaceholderText(inp, raw)) {
                 return;
             }
-            AccessibilityNodeInfo inp = findEditable(root, /*focusedOnly*/ true);
-            if (inp == null) {
+            if (isPlaceholderLike(raw, wpkg, now, true)) {
+                rememberPlaceholder(raw, wpkg, now);
                 return;
             }
-            try {
-                if (!isUsableForInput(inp, cfg)) {
-                    return;
-                }
-                CharSequence cs = inp.getText();
-                if (cs == null || cs.length() == 0) {
-                    return; // 空输入交给事件路径记录，轮询只做只读 diff，不干扰提示词时序
-                }
-                String raw = cs.toString();
-                if (raw.isEmpty() || isPlaceholderText(inp, raw)) {
-                    return;
-                }
-                if (isPlaceholderLike(raw, wpkg, now, true)) {
-                    rememberPlaceholder(raw, wpkg, now);
-                    return;
-                }
-                // 标点模式：轮询只在句末为标点时改写，保持与事件路径语义一致
-                boolean realtime = CatConfig.MODE_REALTIME.equals(cfg.processingMode);
-                if (!realtime && !isPunctuationEnding(raw.trim())) {
-                    return;
-                }
-                this.lastInputPkg = wpkg;
-                doProcess(false, inp); // doProcess 负责回收 inp
-                inp = null;
-            } finally {
-                if (inp != null) {
-                    inp.recycle();
-                }
+            // 标点模式：轮询只在句末为标点时改写，保持与事件路径语义一致
+            boolean realtime = CatConfig.MODE_REALTIME.equals(cfg.processingMode);
+            if (!realtime && !isPunctuationEnding(raw.trim())) {
+                return;
             }
+            this.lastInputPkg = wpkg;
+            // 放宽命中（窗口内唯一可编辑节点）不要求聚焦，避免微信 isFocused() 恒为 false 无法改写
+            doProcess(false, inp, !fallback); // doProcess 负责回收 inp
+            inp = null;
         } finally {
-            root.recycle();
+            if (inp != null) {
+                inp.recycle();
+            }
+        }
+    }
+
+    /** 放宽兜底：微信等自定义输入框 isFocused() 可能恒为 false，聚焦检索会漏掉它。
+     *  仅当窗口内"唯一"的可编辑节点时返回（避免与搜索栏等其他字段并列时误选）。 */
+    private AccessibilityNodeInfo findEditableIfOnlyOne(AccessibilityNodeInfo root) {
+        if (root == null) {
+            return null;
+        }
+        if (countEditable(root) != 1) {
+            return null;
+        }
+        return findEditable(root, /*focusedOnly*/ false);
+    }
+
+    private int countEditable(AccessibilityNodeInfo n) {
+        int c = 0;
+        if (n != null) {
+            if (isEditableNode(n)) {
+                c = 1;
+            }
+            for (int i = 0; i < n.getChildCount(); i++) {
+                AccessibilityNodeInfo child = n.getChild(i);
+                if (child != null) {
+                    c += countEditable(child);
+                    child.recycle();
+                }
+            }
+        }
+        return c;
+    }
+
+    private String safeClassName(AccessibilityNodeInfo n) {
+        try {
+            CharSequence cs = n == null ? null : n.getClassName();
+            return cs == null ? "null" : cs.toString();
+        } catch (Exception e) {
+            return "err";
         }
     }
 }
