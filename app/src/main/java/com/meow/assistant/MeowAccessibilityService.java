@@ -97,7 +97,7 @@ public class MeowAccessibilityService extends AccessibilityService {
                     Log.d(TAG, "点击发送按钮，兜底处理");
                     this.sendResetUntil = System.currentTimeMillis();
                     this.sendResetPkg = pkg;
-                    doProcess(true);
+                    doProcess(true, null);
                 }
                 src.recycle();
             }
@@ -118,6 +118,11 @@ public class MeowAccessibilityService extends AccessibilityService {
                 rememberPlaceholder(afterCs.toString(), pkg, nowMs);
                 return;
             }
+            // 事件源 node 就是"用户正在编辑的输入框"。改写必须写回该节点，
+            // 绝不能再去全窗口重新扫描挑一个随机的可编辑节点——否则用户在某输入框
+            // "全选删除"（输入框变空）时，会误把主页顶部搜索栏等其它字段当作目标，
+            // 把待输入文本错误地填写/改写进搜索栏（本次 bug 的根因）。
+            AccessibilityNodeInfo src = e.getSource();
             if (CatConfig.MODE_REALTIME.equals(cfg.processingMode)) {
                 // 流式输入防抖（仅实时模式）：语音输入/输入法候选词会以极快频率连续触发
                 // 文本变化，若两次变化间隔小于 stableDelayMs，视为"输入尚未成型"，跳过，
@@ -128,66 +133,37 @@ public class MeowAccessibilityService extends AccessibilityService {
                 this.lastTextChangeTime = now;
                 if (cfg.stableDelayMs > 0 && gap < cfg.stableDelayMs) {
                     Log.d(TAG, "流式输入防抖跳过 (gap=" + gap + "ms)");
+                    if (src != null) {
+                        src.recycle();
+                    }
                     return;
                 }
-                doProcess(false);
+                this.lastInputPkg = pkg;
+                doProcess(false, src);
                 return;
             }
             // 标点触发模式：取当前输入框文本，句末为标点才处理
-            String raw = readEditableTextFromEvent(e, cfg, pkg);
-            if (raw == null || raw.trim().isEmpty()) {
-                return;
-            }
-            if (isPunctuationEnding(raw.trim())) {
-                Log.d(TAG, "标点触发: " + raw.trim());
-                doProcess(false);
-            }
-        }
-    }
-
-    /**
-     * 从事件源（若为可编辑节点）读取文本；事件源不可用时回退到窗口树搜索。
-     * 已集成防护：仅接受"可处理"节点（见 isUsableForInput），并排除提示词文本。
-     */
-    private String readEditableTextFromEvent(AccessibilityEvent e, CatConfig cfg, String pkg) {
-        long now = System.currentTimeMillis();
-        AccessibilityNodeInfo src = e.getSource();
-        if (src != null) {
-            try {
+            String raw = null;
+            if (src != null) {
                 if (isUsableForInput(src, cfg)) {
                     CharSequence cs = src.getText();
                     if (cs != null && cs.length() > 0) {
-                        String text = cs.toString();
-                        if (!isPlaceholderText(src, text) && !isPlaceholderLike(text, pkg, now, true)) {
-                            return text;
+                        String t = cs.toString();
+                        if (!isPlaceholderText(src, t) && !isPlaceholderLike(t, pkg, nowMs, true)) {
+                            raw = t;
                         }
                     }
                 }
-            } finally {
-                src.recycle();
+                if (raw == null || !isPunctuationEnding(raw.trim())) {
+                    src.recycle();
+                    return;
+                }
             }
-        }
-        AccessibilityNodeInfo inp = findEditableInAppWindows();
-        if (inp == null) {
-            return null;
-        }
-        try {
-            if (!isUsableForInput(inp, cfg)) {
-                return null;
+            if (raw != null) {
+                Log.d(TAG, "标点触发: " + raw.trim());
+                this.lastInputPkg = pkg;
+                doProcess(false, src);
             }
-            CharSequence cs = inp.getText();
-            if (cs == null || cs.length() == 0) {
-                noteEmpty(pkg, now);
-                return null;
-            }
-            String text = cs.toString();
-            if (isPlaceholderText(inp, text) || isPlaceholderLike(text, pkg, now, true)) {
-                rememberPlaceholder(text, pkg, now);
-                return null;
-            }
-            return text;
-        } finally {
-            inp.recycle();
         }
     }
 
@@ -299,8 +275,11 @@ public class MeowAccessibilityService extends AccessibilityService {
         return last == 12290 || last == 65281 || last == '!' || last == 65311 || last == '?' || last == ' ';
     }
 
-    private void doProcess(boolean isSendClick) {
+    private void doProcess(boolean isSendClick, AccessibilityNodeInfo inp) {
         if (this.processing) {
+            if (inp != null) {
+                inp.recycle(); // 入口被占用时，释放本次传入的节点
+            }
             return;
         }
         this.processing = true;
@@ -309,8 +288,14 @@ public class MeowAccessibilityService extends AccessibilityService {
             cfg = CatConfig.load(this);
             this.cachedConfig = cfg;
         }
-        AccessibilityNodeInfo inp = findEditableInAppWindows();
-        if (inp == null || !isUsableForInput(inp, cfg)) {
+        // 优先使用调用方传入的节点（事件源 = 用户正在编辑的输入框）；
+        // 仅当没有（如点击发送按钮的兜底）才做全窗扫描兜底。
+        if (inp == null) {
+            inp = findEditableInAppWindows();
+        }
+        // 只在"可编辑 + 聚焦"的输入框上改写：事件源即用户正编辑的字段，
+        // 兜底扫描同样必须聚焦——绝不把文本写进未聚焦的搜索栏/占位字段。
+        if (inp == null || !isEditableNode(inp) || !isUsableForInput(inp, cfg)) {
             if (inp != null) {
                 inp.recycle();
             }
