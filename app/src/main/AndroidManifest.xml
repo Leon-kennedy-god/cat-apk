@@ -20,12 +20,7 @@
             </intent-filter>
         </activity>
 
-        <!--
-            喵喵助手无障碍服务：
-            - 不再限定任何包名（原版写死 QQ 的 com.tencent.mobileqq / com.tencent.mobileqqi）
-            - 不依赖任何硬编码 View ID（原版写死 com.tencent.mobileqq:id/input）
-            - 通过通用“可编辑节点”检索 + 目标应用白名单/黑名单，适配任意聊天软件
-        -->
+        <!-- 喵喵助手无障碍服务：不限定包名、不依赖 View ID，通过通用可编辑节点检索 + 白名单/黑名单适配任意聊天软件 -->
         <service
             android:name=".MeowAccessibilityService"
             android:exported="true"
@@ -37,6 +32,32 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 半自动剪贴板改写入口（微信等屏蔽无障碍节点树的应用）。透明无界面，改写后立即 finish 回到原应用。 -->
+        <activity
+            android:name=".RewriteActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:label="@string/rewrite_label"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 快捷设置磁贴：点击拉起 RewriteActivity 完成改写 -->
+        <service
+            android:name=".RewriteTileService"
+            android:exported="true"
+            android:label="@string/rewrite_tile_label"
+            android:icon="@drawable/ic_tile_rewrite"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
         </service>
 
     </application>

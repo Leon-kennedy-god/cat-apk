@@ -2,4 +2,6 @@
     <string name="app_name">喵喵助手</string>
     <string name="accessibility_label">喵喵助手（任意聊天软件文本改写）</string>
     <string name="accessibility_description">喵喵助手无障碍服务：在任意聊天软件（QQ、微信、Telegram、WhatsApp、钉钉、Discord、飞书等）的输入框内自动改写文本——按自定义规则替换词语、断句追加文本、句末附加随机颜文字。可在应用内设置目标应用白名单与排除列表，仅改写聊天输入内容，不处理密码框。</string>
+    <string name="rewrite_label">改写剪贴板</string>
+    <string name="rewrite_tile_label">改写剪贴板</string>
 </resources>
