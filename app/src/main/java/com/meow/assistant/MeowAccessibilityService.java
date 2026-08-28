@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -63,6 +65,20 @@ public class MeowAccessibilityService extends AccessibilityService {
     private long lastPlaceholderTime = 0;
     /** 最近一次找到的输入框所属包名（doProcess 提示词防护用） */
     private String lastInputPkg = "";
+
+    // ===== 微信/自定义输入框的轮询兜底 =====
+    // 微信等应用的自定义输入控件（常被标记为非重要 View），可能吞掉 TYPE_VIEW_TEXT_CHANGED
+    // 事件，导致事件驱动改写"没反应"。这里用轻量轮询兜底：定期读前台可编辑输入框做文本 diff，
+    // 即使事件被吞也能改写。轮询本身会复用事件路径的防抖时钟与 doProcess 幂等逻辑，不会重复改写。
+    private static final long POLL_INTERVAL_MS = 800L;
+    private final Handler pollHandler = new Handler(Looper.getMainLooper());
+    private final Runnable pollTask = new Runnable() {
+        @Override
+        public void run() {
+            pollForegroundInput();
+            pollHandler.postDelayed(this, POLL_INTERVAL_MS);
+        }
+    };
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent e) {
@@ -607,10 +623,84 @@ public class MeowAccessibilityService extends AccessibilityService {
         // FLAG_DEFAULT 无公开常量（值 1）：与原版 flags=81 等价
         i.flags = 0x00000001
                 | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-                | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+                | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                | AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
         i.notificationTimeout = 50L;
         // 关键：不再设置 packageNames —— 监听所有应用，作用范围由配置动态决定
         setServiceInfo(i);
         this.cachedConfig = CatConfig.load(this);
+        // 启动轮询兜底，覆盖微信等吞掉文本变化事件、只有非重要 View 接入点的场景
+        pollHandler.removeCallbacks(pollTask);
+        pollHandler.postDelayed(pollTask, POLL_INTERVAL_MS);
+    }
+
+    @Override
+    public void onDestroy() {
+        pollHandler.removeCallbacks(pollTask);
+        super.onDestroy();
+    }
+
+    /** 轮询兜底：微信等应用可能屏蔽文本变化事件，改为定期读取前台可编辑输入框进行改写 */
+    private void pollForegroundInput() {
+        if (processing) {
+            return;
+        }
+        CatConfig cfg = cachedConfig;
+        if (cfg == null) {
+            cfg = CatConfig.load(this);
+            cachedConfig = cfg;
+        }
+        long now = System.currentTimeMillis();
+        // 事件路径刚处理过 / 仍在流式防抖窗口内 → 交给事件路径，避免重复改写
+        if (this.lastTextChangeTime > 0 && now - this.lastTextChangeTime < cfg.stableDelayMs) {
+            return;
+        }
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) {
+            return;
+        }
+        try {
+            CharSequence pk = root.getPackageName();
+            String wpkg = pk != null ? pk.toString() : "";
+            if (wpkg.isEmpty() || wpkg.equals(getPackageName())
+                    || !cfg.shouldHandlePackage(wpkg)) {
+                return;
+            }
+            AccessibilityNodeInfo inp = findEditable(root, /*focusedOnly*/ true);
+            if (inp == null) {
+                return;
+            }
+            try {
+                if (!isUsableForInput(inp, cfg)) {
+                    return;
+                }
+                CharSequence cs = inp.getText();
+                if (cs == null || cs.length() == 0) {
+                    return; // 空输入交给事件路径记录，轮询只做只读 diff，不干扰提示词时序
+                }
+                String raw = cs.toString();
+                if (raw.isEmpty() || isPlaceholderText(inp, raw)) {
+                    return;
+                }
+                if (isPlaceholderLike(raw, wpkg, now, true)) {
+                    rememberPlaceholder(raw, wpkg, now);
+                    return;
+                }
+                // 标点模式：轮询只在句末为标点时改写，保持与事件路径语义一致
+                boolean realtime = CatConfig.MODE_REALTIME.equals(cfg.processingMode);
+                if (!realtime && !isPunctuationEnding(raw.trim())) {
+                    return;
+                }
+                this.lastInputPkg = wpkg;
+                doProcess(false, inp); // doProcess 负责回收 inp
+                inp = null;
+            } finally {
+                if (inp != null) {
+                    inp.recycle();
+                }
+            }
+        } finally {
+            root.recycle();
+        }
     }
 }
